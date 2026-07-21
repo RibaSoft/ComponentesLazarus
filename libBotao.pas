@@ -3,7 +3,7 @@ unit libBotao; {$mode ObjFPC}{$H+}
 interface
 
 uses
-  Classes, SysUtils, Controls, ExtCtrls, Graphics, LMessages, LCLIntf, LResources, ImgList, Types, LCLType;
+  Classes, SysUtils, Controls, ExtCtrls, Graphics, LMessages, LCLIntf, LResources, ImgList, Types, LCLType, Forms;
 
 type
 
@@ -26,6 +26,10 @@ type
     FImages: TCustomImageList;
     FMouseSobre: boolean;
     FSpacing: integer;
+    FProcessandoClique: boolean;
+    FUltimoClique: QWord;
+    FIntervaloClique: integer;
+    FTextoAguarde: string;
     procedure CMMouseEnter(var Message: TLMessage); message CM_MOUSEENTER;
     procedure CMMouseLeave(var Message: TLMessage); message CM_MOUSELEAVE;
     procedure SetCorNormal(AValue: TColor);
@@ -61,6 +65,11 @@ type
     property Images: TCustomImageList read FImages write SetImages;
     property ImageIndex: TImageIndex read FImageIndex write SetImageIndex default -1;
     property Spacing: integer read FSpacing write SetSpacing default 4;
+
+    // Janela anti-duplo-clique em milissegundos (0 desliga a proteção).
+    property IntervaloClique: integer read FIntervaloClique write FIntervaloClique default 700;
+    // Texto exibido enquanto o OnClick processa. Vazio = mantém o Caption normal.
+    property TextoAguarde: string read FTextoAguarde write FTextoAguarde;
 
     //Propriedades herdadas
     property Caption;
@@ -98,6 +107,12 @@ begin
   TabStop := True;
   ControlStyle := ControlStyle - [csAcceptsControls];
   ShowHint := True;
+
+  //Anti-duplo-clique + aguarde
+  FIntervaloClique := 700;
+  FUltimoClique := 0;
+  FProcessandoClique := False;
+  FTextoAguarde := 'Aguarde...';
 
   //Fundo
   Self.Color := $00D27619;
@@ -214,9 +229,35 @@ begin
 end;
 
 //====================================================== EFEITO DO CLICK =============================================\\
+// Anti-duplo-clique. Duas travas combinadas:
+//  - FProcessandoClique: barra reentrancia enquanto o OnClick roda (inclusive
+//    parado num dialogo modal, que roda o loop de mensagens).
+//  - FUltimoClique: carimbo de tempo gravado NA CONCLUSAO, para barrar o 2o
+//    clique que ficou na fila durante um OnClick sincrono demorado (PC lento).
+// IntervaloClique = 0 desliga a protecao (botoes que precisam de clique repetido).
 procedure TBotao.Click;
+var
+  auxCursor: TCursor;
 begin
-  inherited Click;
+  if FProcessandoClique then Exit;
+
+  if (FIntervaloClique > 0) and (FUltimoClique <> 0) and
+     (GetTickCount64 - FUltimoClique < QWord(FIntervaloClique)) then
+    Exit;
+
+  FProcessandoClique := True;
+  auxCursor := Screen.Cursor;
+  Screen.Cursor := crHourGlass;
+  Repaint;                       // pinta "Aguarde..." ANTES do processamento (inclusive sincrono)
+  try
+    inherited Click;
+  finally
+    Screen.Cursor := auxCursor;
+    FProcessandoClique := False;
+    FUltimoClique := GetTickCount64;
+    if not (csDestroying in ComponentState) then
+      Repaint;                   // restaura o visual normal
+  end;
 end;
 
 //==================================================== QUANDO EM FOCO ================================================\\
@@ -271,9 +312,15 @@ var
   HasIcon: boolean;
   R: TRect;
   TextStyle: TTextStyle;
+  auxTexto: string;
 begin
   //1 Determina cores
-  if not Enabled then
+  if FProcessandoClique then          // estado "Aguarde..."
+  begin
+    CorFundo := FCorClick;
+    CorFonte := FFontCorClick;
+  end
+  else if not Enabled then
   begin
     CorFundo := FCorDisabled;
     CorFonte := FFontCorDisabled;
@@ -288,6 +335,11 @@ begin
     CorFundo := FCorHover;
     CorFonte := FFontCorHover;
   end
+  else if Focused or (FMouseSobre and (csDesigning in ComponentState)) then
+  begin
+    CorFundo := FCorFocus;
+    CorFonte := FFontCorFocus;
+  end
   else
   begin
     CorFundo := FCorNormal;
@@ -299,7 +351,14 @@ begin
   Canvas.FillRect(ClientRect);
 
   //3 Prepara icone e texto
-  HasIcon := Assigned(FImages) and (FImageIndex >= 0) and (FImageIndex < FImages.Count);
+  // Durante o "Aguarde..." esconde o icone e usa o texto de espera.
+  HasIcon := Assigned(FImages) and (FImageIndex >= 0) and (FImageIndex < FImages.Count) and (not FProcessandoClique);
+
+  if FProcessandoClique and (FTextoAguarde <> '') then
+    auxTexto := FTextoAguarde
+  else
+    auxTexto := Caption;
+
   Canvas.Font.Assign(Font);
   Canvas.Font.Color := CorFonte;
 
@@ -312,8 +371,8 @@ begin
     IconHeight := FImages.Height;
   end;
 
-  TextW := Canvas.TextWidth(StringReplace(Caption, '&', '', [rfReplaceAll]));
-  TextH := Canvas.TextHeight(Caption);
+  TextW := Canvas.TextWidth(StringReplace(auxTexto, '&', '', [rfReplaceAll]));
+  TextH := Canvas.TextHeight(auxTexto);
 
   TotalWidth := TextW;
   if HasIcon then
@@ -331,7 +390,7 @@ begin
   end;
 
   // 5. Desenha o Texto
-  if Caption <> '' then
+  if auxTexto <> '' then
   begin
     TextY := (Height - TextH) div 2;
     TextStyle := Canvas.TextStyle;
@@ -341,7 +400,7 @@ begin
 
     R := ClientRect;
     R.Left := StartX;
-    Canvas.TextRect(R, R.Left, TextY, Caption, TextStyle);
+    Canvas.TextRect(R, R.Left, TextY, auxTexto, TextStyle);
   end;
 
   //Desenha borda quando focado
@@ -351,7 +410,7 @@ begin
     Canvas.Pen.Color := FCorBordaFoco;
     Canvas.Pen.Style := psSolid;
     Canvas.Pen.Width := 2;
-    Canvas.Rectangle(1, 1, Width - 1, Height - 1);
+    Canvas.Rectangle(1, 1, Width, Height);
   end;
 end;
 
