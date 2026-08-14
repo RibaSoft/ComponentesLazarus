@@ -30,12 +30,14 @@ type
     FUltimoClique: QWord;
     FIntervaloClique: integer;
     FTextoAguarde: string;
+    FCursorAnterior: TCursor;
     procedure CMMouseEnter(var Message: TLMessage); message CM_MOUSEENTER;
     procedure CMMouseLeave(var Message: TLMessage); message CM_MOUSELEAVE;
     procedure SetCorNormal(AValue: TColor);
     procedure SetImageIndex(AValue: TImageIndex);
     procedure SetImages(AValue: TCustomImageList);
     procedure SetSpacing(AValue: integer);
+    procedure AppOcioso(Sender: TObject; var Done: boolean);
   protected
     procedure Paint; override;
     procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: integer); override;
@@ -236,8 +238,6 @@ end;
 //    clique que ficou na fila durante um OnClick sincrono demorado (PC lento).
 // IntervaloClique = 0 desliga a protecao (botoes que precisam de clique repetido).
 procedure TBotao.Click;
-var
-  auxCursor: TCursor;
 begin
   if FProcessandoClique then Exit;
 
@@ -246,19 +246,38 @@ begin
     Exit;
 
   FProcessandoClique := True;
-  auxCursor := Screen.Cursor;
+  FCursorAnterior := Screen.Cursor;
   Screen.Cursor := crHourGlass;
+  Application.AddOnIdleHandler(@AppOcioso);   // devolve o cursor se o clique parar pra esperar o usuario
   Repaint;                       // pinta "Aguarde..." ANTES do processamento (inclusive sincrono)
   try
     inherited Click;
   finally
-    Screen.Cursor := auxCursor;
+    Application.RemoveOnIdleHandler(@AppOcioso);
+    Screen.Cursor := FCursorAnterior;
     FProcessandoClique := False;
     FUltimoClique := GetTickCount64;
     if not (csDestroying in ComponentState) then
       Repaint;                   // restaura o visual normal
   end;
 end;
+
+//================================================== APP OCIOSO ======================================================\\
+// O OnClick pode abrir uma janela (ShowModal). Enquanto ela fica aberta, o laco
+// do ShowModal chama Application.Idle a cada volta: o programa NAO esta
+// processando, esta parado esperando o usuario clicar. Nessa hora a ampulheta
+// engana - o cliente fica esperando o cursor mudar pra poder clicar.
+// Entao devolvemos o cursor normal. Quem sinaliza o processamento continua
+// sendo o "Aguarde..." escrito no proprio botao.
+// Trabalho sincrono (relatorio, impressao) nunca fica ocioso: la a ampulheta fica.
+{$HINTS OFF}
+procedure TBotao.AppOcioso(Sender: TObject; var Done: boolean);
+begin
+  if Screen.Cursor = crHourGlass then
+    Screen.Cursor := FCursorAnterior;
+  // Done NAO e alterado de proposito: mexer nele poe o app pra girar em laco.
+end;
+{$HINTS ON}
 
 //==================================================== QUANDO EM FOCO ================================================\\
 procedure TBotao.DoEnter;
